@@ -36,6 +36,12 @@ export class RentalUnit {
   @Prop({ type: Types.ObjectId, ref: User.name, required: true })
   createdBy: Types.ObjectId;
 
+  @Prop({ type: Number, default: 0, min: 0, max: 5 })
+  averageRating: number;
+
+  @Prop({ type: Number, default: 0, min: 0 })
+  reviewCount: number;
+
   @Prop({ type: Date, default: null })
   deletedAt?: Date | null;
 }

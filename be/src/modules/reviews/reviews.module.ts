@@ -10,6 +10,7 @@ import {
   RentalUnit,
   RentalUnitSchema,
 } from '../properties/schemas/rental-unit.schema.js';
+import { User, UserSchema } from '../users/schemas/user.schema.js';
 import { ReviewsService } from './reviews.service.js';
 import { ReviewsController } from './reviews.controller.js';
 import { MediaStorageService } from './media-storage.service.js';
@@ -21,6 +22,7 @@ import { MediaStorageService } from './media-storage.service.js';
       { name: MediaUpload.name, schema: MediaUploadSchema },
       { name: Property.name, schema: PropertySchema },
       { name: RentalUnit.name, schema: RentalUnitSchema },
+      { name: User.name, schema: UserSchema },
     ]),
   ],
   controllers: [ReviewsController],

@@ -1,10 +1,12 @@
 import {
   Controller,
+  Get,
   Post,
   Patch,
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
   UseInterceptors,
   UploadedFiles,
@@ -16,6 +18,7 @@ import { ReviewsService } from './reviews.service.js';
 import { MediaStorageService } from './media-storage.service.js';
 import { CreateReviewDto } from './dto/create-review.dto.js';
 import { UpdateReviewDto } from './dto/update-review.dto.js';
+import { QueryReviewDto } from './dto/query-review.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { UserDocument } from '../users/schemas/user.schema.js';
@@ -59,6 +62,17 @@ export class ReviewsController {
     }
 
     return uploadedResults;
+  }
+
+  /**
+   * Get public reviews for a Property with pagination, filters, and overall summary (Public)
+   */
+  @Get('properties/:propertyId/reviews')
+  async getReviewsByProperty(
+    @Param('propertyId') propertyId: string,
+    @Query() query: QueryReviewDto,
+  ) {
+    return this.reviewsService.getReviewsByProperty(propertyId, query);
   }
 
   /**

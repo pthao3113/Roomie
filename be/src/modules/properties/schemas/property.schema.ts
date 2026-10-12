@@ -28,6 +28,12 @@ export class Property {
   @Prop({ type: Types.ObjectId, ref: User.name, required: true })
   createdBy: Types.ObjectId;
 
+  @Prop({ type: Number, default: 0, min: 0, max: 5 })
+  averageRating: number;
+
+  @Prop({ type: Number, default: 0, min: 0 })
+  reviewCount: number;
+
   @Prop({ type: Date, default: null })
   deletedAt?: Date | null;
 }
@@ -46,5 +52,11 @@ PropertySchema.index(
 // 3. Index for creator lookup on active properties
 PropertySchema.index(
   { createdBy: 1 },
+  { partialFilterExpression: { deletedAt: null } },
+);
+
+// 4. Index for rating sorting & filtering on active properties
+PropertySchema.index(
+  { averageRating: -1 },
   { partialFilterExpression: { deletedAt: null } },
 );
