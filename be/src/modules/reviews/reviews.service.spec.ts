@@ -10,14 +10,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { ReviewsService } from './reviews.service.js';
 import { Review } from './schemas/review.schema.js';
+import { MediaUpload } from './schemas/media-upload.schema.js';
 import { Property } from '../properties/schemas/property.schema.js';
 import { RentalUnit } from '../properties/schemas/rental-unit.schema.js';
+import { MediaStorageService } from './media-storage.service.js';
 
-describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () => {
+describe('ReviewsService Unit Suite (Migration 3 - LU1 & LU2 Review Management)', () => {
   let service: ReviewsService;
   let mockReviewModel: any;
+  let mockMediaUploadModel: any;
   let mockPropertyModel: any;
   let mockRentalUnitModel: any;
+  let mockMediaStorageService: any;
 
   const validPropId = '507f1f77bcf86cd799439011';
   const otherPropId = '507f1f77bcf86cd799439099';
@@ -43,7 +47,7 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
   };
 
   const mockActiveReview = {
-    _id: validReviewId,
+    _id: new Types.ObjectId(validReviewId),
     propertyId: new Types.ObjectId(validPropId),
     rentalUnitId: null,
     userId: {
@@ -69,6 +73,10 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       exec: vi.fn(),
     };
 
+    mockMediaStorageService = {
+      destroyCloudinaryMedia: vi.fn().mockResolvedValue(undefined),
+    };
+
     function MockReviewModel(this: any, dto: any) {
       Object.assign(this, dto);
     }
@@ -86,6 +94,16 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
 
     mockReviewModel = MockReviewModel;
 
+    mockMediaUploadModel = {
+      find: vi.fn().mockReturnThis(),
+      findOne: vi.fn().mockReturnThis(),
+      findOneAndUpdate: vi.fn().mockResolvedValue(null),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+      updateMany: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+      exec: vi.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ReviewsService,
@@ -94,12 +112,20 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
           useValue: mockReviewModel,
         },
         {
+          provide: getModelToken(MediaUpload.name),
+          useValue: mockMediaUploadModel,
+        },
+        {
           provide: getModelToken(Property.name),
           useValue: mockPropertyModel,
         },
         {
           provide: getModelToken(RentalUnit.name),
           useValue: mockRentalUnitModel,
+        },
+        {
+          provide: MediaStorageService,
+          useValue: mockMediaStorageService,
         },
       ],
     }).compile();
@@ -145,7 +171,100 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       expect(result.rentalUnitId).toBeDefined();
     });
 
-    it('3. Should throw BadRequestException for invalid propertyId', async () => {
+    it('3. Should attach valid media to review and claim it atomically', async () => {
+      vi.spyOn(mockPropertyModel, 'findOne').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce(mockActiveProperty),
+      } as any);
+
+      const mockMediaDoc = {
+        publicId: 'roomie/reviews/img_1',
+        url: 'https://cloudinary.com/img_1.jpg',
+        type: 'image',
+        userId: { equals: (id: Types.ObjectId) => id.toString() === authorUserId },
+        reviewId: null,
+        isAttached: false,
+        detachedAt: null,
+      };
+
+      vi.spyOn(mockMediaUploadModel, 'find').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce([mockMediaDoc]),
+      } as any);
+
+      const result = await service.createReview(validPropId, authorUserId, {
+        rating: 5,
+        media: [{ publicId: 'roomie/reviews/img_1' }],
+      });
+
+      expect(result).toBeDefined();
+      expect(result.media).toHaveLength(1);
+      expect(result.media[0].publicId).toBe('roomie/reviews/img_1');
+      expect(mockMediaUploadModel.updateMany).toHaveBeenCalled();
+    });
+
+    it('4. Should throw ForbiddenException if user attempts to attach media owned by someone else', async () => {
+      vi.spyOn(mockPropertyModel, 'findOne').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce(mockActiveProperty),
+      } as any);
+
+      const mockOtherUserMedia = {
+        publicId: 'roomie/reviews/img_stolen',
+        url: 'https://cloudinary.com/img_stolen.jpg',
+        type: 'image',
+        userId: { equals: (id: Types.ObjectId) => id.toString() === otherUserId }, // not author
+        reviewId: null,
+        isAttached: false,
+        detachedAt: null,
+      };
+
+      vi.spyOn(mockMediaUploadModel, 'find').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce([mockOtherUserMedia]),
+      } as any);
+
+      await expect(
+        service.createReview(validPropId, authorUserId, {
+          rating: 5,
+          media: [{ publicId: 'roomie/reviews/img_stolen' }],
+        }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('5. Should throw BadRequestException if media exceeds 5 images or 1 video limit', async () => {
+      vi.spyOn(mockPropertyModel, 'findOne').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce(mockActiveProperty),
+      } as any);
+
+      const mock2Videos = [
+        {
+          publicId: 'v1',
+          url: 'url1',
+          type: 'video',
+          userId: { equals: () => true },
+          reviewId: null,
+          detachedAt: null,
+        },
+        {
+          publicId: 'v2',
+          url: 'url2',
+          type: 'video',
+          userId: { equals: () => true },
+          reviewId: null,
+          detachedAt: null,
+        },
+      ];
+
+      vi.spyOn(mockMediaUploadModel, 'find').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce(mock2Videos),
+      } as any);
+
+      await expect(
+        service.createReview(validPropId, authorUserId, {
+          rating: 5,
+          media: [{ publicId: 'v1' }, { publicId: 'v2' }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('6. Should throw BadRequestException for invalid propertyId', async () => {
       await expect(
         service.createReview('invalid-id', authorUserId, {
           rating: 5,
@@ -153,7 +272,7 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('4. Should throw NotFoundException if property does not exist or is soft-deleted', async () => {
+    it('7. Should throw NotFoundException if property does not exist or is soft-deleted', async () => {
       vi.spyOn(mockPropertyModel, 'findOne').mockReturnValueOnce({
         exec: vi.fn().mockResolvedValueOnce(null),
       } as any);
@@ -165,7 +284,7 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('5. Should throw BadRequestException if rentalUnit does not belong to target property', async () => {
+    it('8. Should throw BadRequestException if rentalUnit does not belong to target property', async () => {
       vi.spyOn(mockPropertyModel, 'findOne').mockReturnValueOnce({
         exec: vi.fn().mockResolvedValueOnce(mockActiveProperty),
       } as any);
@@ -191,7 +310,7 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('6. Should catch duplicate error code 11000 and throw ConflictException', async () => {
+    it('9. Should catch duplicate error code 11000 and throw ConflictException', async () => {
       vi.spyOn(mockPropertyModel, 'findOne').mockReturnValueOnce({
         exec: vi.fn().mockResolvedValueOnce(mockActiveProperty),
       } as any);
@@ -209,7 +328,7 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
   });
 
   describe('updateReview', () => {
-    it('7. Should update review successfully when called by author', async () => {
+    it('10. Should update review successfully when called by author', async () => {
       const mockReviewToUpdate = {
         ...mockActiveReview,
         save: vi.fn().mockResolvedValue({
@@ -235,7 +354,33 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       expect(result.isAnonymous).toBe(true);
     });
 
-    it('8. Should throw ForbiddenException if user is not review author', async () => {
+    it('11. Should detach all media when media is updated to empty array', async () => {
+      const reviewWithMedia = {
+        ...mockActiveReview,
+        media: [{ publicId: 'old_img', url: 'old_url', type: 'image' }],
+        save: vi.fn().mockImplementation(function (this: any) {
+          return Promise.resolve(this);
+        }),
+      };
+
+      vi.spyOn(mockReviewModel, 'findOne').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce(reviewWithMedia),
+      } as any);
+
+      const result = await service.updateReview(validReviewId, authorUserId, {
+        media: [],
+      });
+
+      expect(result.media).toHaveLength(0);
+      expect(mockMediaUploadModel.updateMany).toHaveBeenCalledWith(
+        { reviewId: reviewWithMedia._id },
+        expect.objectContaining({
+          $set: expect.objectContaining({ isAttached: false }),
+        }),
+      );
+    });
+
+    it('12. Should throw ForbiddenException if user is not review author', async () => {
       vi.spyOn(mockReviewModel, 'findOne').mockReturnValueOnce({
         exec: vi.fn().mockResolvedValueOnce(mockActiveReview),
       } as any);
@@ -247,7 +392,7 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('9. Should throw NotFoundException if review does not exist or is soft-deleted', async () => {
+    it('13. Should throw NotFoundException if review does not exist or is soft-deleted', async () => {
       vi.spyOn(mockReviewModel, 'findOne').mockReturnValueOnce({
         exec: vi.fn().mockResolvedValueOnce(null),
       } as any);
@@ -261,7 +406,7 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
   });
 
   describe('deleteReview', () => {
-    it('10. Should soft-delete review successfully when called by author', async () => {
+    it('14. Should soft-delete review successfully when called by author', async () => {
       const mockSave = vi.fn().mockResolvedValue({
         ...mockActiveReview,
         deletedAt: new Date(),
@@ -278,7 +423,7 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       expect(result.deletedAt).toBeDefined();
     });
 
-    it('11. Should throw ForbiddenException if user attempting delete is not author', async () => {
+    it('15. Should throw ForbiddenException if user attempting delete is not author', async () => {
       vi.spyOn(mockReviewModel, 'findOne').mockReturnValueOnce({
         exec: vi.fn().mockResolvedValueOnce(mockActiveReview),
       } as any);
@@ -288,7 +433,7 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('12. Should throw NotFoundException if review is already soft-deleted', async () => {
+    it('16. Should throw NotFoundException if review is already soft-deleted', async () => {
       vi.spyOn(mockReviewModel, 'findOne').mockReturnValueOnce({
         exec: vi.fn().mockResolvedValueOnce(null),
       } as any);
@@ -296,6 +441,108 @@ describe('ReviewsService Unit Suite (Migration 3 - LU1 Review Core & CRUD)', () 
       await expect(
         service.deleteReview(validReviewId, authorUserId),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('cleanupOrphanMedia', () => {
+    it('17. Should claim with findOneAndUpdate and delete unattached media older than cutoff time', async () => {
+      const orphanRecord = {
+        _id: 'orphan_1',
+        publicId: 'roomie/reviews/orphan_img',
+        type: 'image',
+      };
+
+      vi.spyOn(mockMediaUploadModel, 'find').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce([orphanRecord]),
+      } as any);
+
+      vi.spyOn(mockMediaUploadModel, 'findOneAndUpdate').mockResolvedValueOnce(
+        orphanRecord,
+      );
+      vi.spyOn(mockMediaStorageService, 'destroyCloudinaryMedia').mockResolvedValueOnce(true);
+
+      const count = await service.cleanupOrphanMedia(24);
+
+      expect(count).toBe(1);
+      expect(mockMediaUploadModel.findOneAndUpdate).toHaveBeenCalled();
+      expect(mockMediaStorageService.destroyCloudinaryMedia).toHaveBeenCalledWith(
+        'roomie/reviews/orphan_img',
+        'image',
+      );
+      expect(mockMediaUploadModel.deleteOne).toHaveBeenCalledWith({
+        _id: 'orphan_1',
+      });
+    });
+
+    it('18. Should retain record and reset isCleaningUp to false if Cloudinary destroy fails', async () => {
+      const orphanRecord = {
+        _id: 'orphan_failed_destroy',
+        publicId: 'roomie/reviews/failed_img',
+        type: 'image',
+      };
+
+      vi.spyOn(mockMediaUploadModel, 'find').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce([orphanRecord]),
+      } as any);
+
+      vi.spyOn(mockMediaUploadModel, 'findOneAndUpdate').mockResolvedValueOnce(
+        orphanRecord,
+      );
+      // Destroy returns false (failed)
+      vi.spyOn(mockMediaStorageService, 'destroyCloudinaryMedia').mockResolvedValueOnce(false);
+
+      const count = await service.cleanupOrphanMedia(24);
+
+      expect(count).toBe(0);
+      expect(mockMediaUploadModel.deleteOne).not.toHaveBeenCalled();
+      expect(mockMediaUploadModel.updateOne).toHaveBeenCalledWith(
+        { _id: 'orphan_failed_destroy' },
+        { $set: { isCleaningUp: false } },
+      );
+    });
+  });
+
+  describe('Atomic Claim Failure & Rollback in updateReview', () => {
+    it('19. Should rollback only added claims and throw BadRequestException if updateReview has partial claim failure', async () => {
+      const reviewWithNoMedia = {
+        ...mockActiveReview,
+        media: [],
+        save: vi.fn().mockResolvedValue(mockActiveReview),
+      };
+
+      vi.spyOn(mockReviewModel, 'findOne').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce(reviewWithNoMedia),
+      } as any);
+
+      const mockDoc = {
+        publicId: 'new_img_1',
+        url: 'url_1',
+        type: 'image',
+        userId: { equals: (id: Types.ObjectId) => id.toString() === authorUserId },
+        reviewId: null,
+        detachedAt: null,
+      };
+
+      vi.spyOn(mockMediaUploadModel, 'find').mockReturnValueOnce({
+        exec: vi.fn().mockResolvedValueOnce([mockDoc]),
+      } as any);
+
+      // Simulate partial or failed claim: modifiedCount is 0 instead of 1
+      vi.spyOn(mockMediaUploadModel, 'updateMany')
+        .mockResolvedValueOnce({ modifiedCount: 0 }) // claim fails
+        .mockResolvedValueOnce({ modifiedCount: 0 }); // rollback
+
+      await expect(
+        service.updateReview(validReviewId, authorUserId, {
+          media: [{ publicId: 'new_img_1' }],
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      // Verify rollback was called with the review._id
+      expect(mockMediaUploadModel.updateMany).toHaveBeenCalledWith(
+        { publicId: { $in: ['new_img_1'] }, reviewId: reviewWithNoMedia._id },
+        { $set: { reviewId: null, isAttached: false } },
+      );
     });
   });
 });

@@ -7,7 +7,12 @@ import {
   IsOptional,
   IsBoolean,
   IsMongoId,
+  IsArray,
+  ArrayMaxSize,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+import { AttachMediaDto } from './attach-media.dto.js';
 
 export class CreateReviewDto {
   @IsOptional()
@@ -27,4 +32,11 @@ export class CreateReviewDto {
   @IsOptional()
   @IsBoolean({ message: 'isAnonymous phải là giá trị boolean' })
   isAnonymous?: boolean;
+
+  @IsOptional()
+  @IsArray({ message: 'media phải là mảng' })
+  @ArrayMaxSize(6, { message: 'Mỗi đánh giá chỉ được đính kèm tối đa 6 tệp media' })
+  @ValidateNested({ each: true })
+  @Type(() => AttachMediaDto)
+  media?: AttachMediaDto[];
 }
