@@ -146,6 +146,12 @@ export class PropertiesService {
     const limit = Math.min(query.limit || 50, 100);
     const filterQuery: any = { deletedAt: null };
 
+    // Rating Filter (LU4): Filter directly using cached reviewCount and averageRating
+    if (query.minRating !== undefined) {
+      filterQuery.reviewCount = { $gt: 0 };
+      filterQuery.averageRating = { $gte: query.minRating };
+    }
+
     if (isRadiusMode) {
       filterQuery.location = {
         $near: {
@@ -171,7 +177,22 @@ export class PropertiesService {
       };
     }
 
-    return this.propertyModel.find(filterQuery).limit(limit).exec();
+    const properties = await this.propertyModel
+      .find(filterQuery)
+      .limit(limit)
+      .exec();
+
+    // Ensure map response always has averageRating and reviewCount (default 0 if missing from legacy records)
+    for (const prop of properties) {
+      if (prop.averageRating === undefined || prop.averageRating === null) {
+        prop.averageRating = 0;
+      }
+      if (prop.reviewCount === undefined || prop.reviewCount === null) {
+        prop.reviewCount = 0;
+      }
+    }
+
+    return properties;
   }
 
   /**

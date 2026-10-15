@@ -66,4 +66,15 @@ export class QueryMapPropertyDto {
   @Min(1, { message: 'Limit tối thiểu là 1' })
   @Max(100, { message: 'Limit tối đa là 100' })
   limit?: number = 50;
+
+  // --- Rating Filter (LU4) ---
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber(
+    { maxDecimalPlaces: 1 },
+    { message: 'minRating phải là số có tối đa 1 chữ số thập phân' },
+  )
+  @Min(1, { message: 'minRating tối thiểu là 1' })
+  @Max(5, { message: 'minRating tối đa là 5' })
+  minRating?: number;
 }
