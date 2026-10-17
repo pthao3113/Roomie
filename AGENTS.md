@@ -60,6 +60,7 @@ Verified from `fe/package.json`:
 - Write or update tests for affected business logic.
 - Run relevant tests and build (`npm test`, `npm run build` in `be/`) before reporting completion.
 - Do not claim tests passed unless the commands actually succeeded.
+- When a content change must be recorded in revision history, update the document and write the history record in ONE MongoDB transaction. Never update first and merely log if the history write fails. If the deployment does not support transactions, those write paths must fail closed (no silent fallback).
 
 ## 5. Core Business Rules
 
@@ -112,6 +113,34 @@ Verified from `fe/package.json`:
 - Verify media ownership before attaching.
 - Prevent reuse of already attached or detached uploads according to existing logic.
 - Handle orphan uploads and failed-upload cleanup.
+
+### Community Governance
+- Roomie is community-driven. There is NO Admin role, AdminGuard, Admin Dashboard or manual moderation workflow. Do not add `User.role` or equivalent privileges.
+- No identity verification of owners is used to grant privileges.
+- Users must never edit or delete another user's Property, RentalUnit or Review. Other users may only submit suggestions; the creator of a Property/RentalUnit may accept or reject them.
+- Reports, confirmations and votes are signals only. Report counts must never auto-delete or auto-hide content.
+- Do not auto-restrict content based only on keywords, emails or phone numbers. Handling of severe-risk content (a "restricted" mechanism) is a known unresolved gap and requires a separately approved design.
+- Reporter identity must never be exposed. Anonymous review author identity must not be exposed by any new response.
+- Suspected manipulation is a risk signal, never proof. Account-creation proximity or vote-timing proximity must not be treated as certain evidence of one person. When manipulation is suspected, the system must not auto-apply a suggestion.
+
+### Community Confirmation & Reporting
+- Community confirmation of a Property/RentalUnit is a signal, not proof of tenancy.
+- Confirmations must not affect `averageRating` or `reviewCount` and must not produce a "Verified" label.
+- Duplicate confirmations and duplicate reports are prevented by unique indexes (E11000 -> 409).
+- Basic spam protection (per-user rate limits via MongoDB counts, 429 on excess) ships together with confirmation and reporting; it is not deferred. No new infrastructure is introduced for it.
+- The creator of a Property/RentalUnit cannot confirm their own content.
+
+### Community Corrections
+- Suggestions are stored separately and never change original data directly. Each suggestion targets one field (amenities use add/remove deltas).
+- `location` and the Property–RentalUnit relationship are immutable and cannot be suggested.
+- Not responding is not consent. After 30 days without a creator decision a suggestion only becomes eligible for system review; vote count alone never applies a change.
+- A creator-rejected suggestion is final and never auto-applied.
+- Every content change (including creator direct edits) is written to immutable revision history; reverts create new revisions and are never destructive.
+- Concurrency is optimistic: a change applies only if the current value still equals the suggestion's base value.
+- The creator keeps all existing edit rights after any community auto-application (no lock). A cooldown limits repeated auto-application of the same field to prevent loops.
+- Community votes must never auto-update coordinates, address, price, deposit, active status, name, description, area or the Property–RentalUnit relationship.
+- Initial safe auto-application (separate LU, requires explicit approval) covers only allow-listed `amenities`. It must be behind a feature flag that is OFF by default, may only be enabled after approval and testing, and must never run automatically at application startup beyond reading that flag.
+- For important fields (e.g. rental price), the community contributes observations shown alongside the original value, never overwriting it.
 
 ## 6. API & Security Principles
 
